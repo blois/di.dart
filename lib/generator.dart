@@ -1,5 +1,7 @@
 library di.generator;
 
+import 'dart:async';
+import 'dart:collection';
 import 'package:analyzer/src/generated/java_io.dart';
 import 'package:analyzer/src/generated/source_io.dart';
 import 'package:analyzer/src/generated/ast.dart';
@@ -32,6 +34,7 @@ main(args) {
   print('packageRoots: $packageRoots');
 
   var c = new SourceCrawler(pathToSdk, packageRoots);
+/*
   List<String> imports = <String>[];
   List<ClassElement> typeFactoryTypes = <ClassElement>[];
   Map<String, String> typeToImport = new Map<String, String>();
@@ -41,7 +44,213 @@ main(args) {
   });
   var code = printLibraryCode(typeToImport, imports, typeFactoryTypes);
   new File(output).writeAsStringSync(code);
+*/
+  // var rootLib = c.resolve(entryPoint);
+  // for (var lib in walkCompilationUnits(rootLib.definingCompilationUnit)) {
+  //   print('visiting ${lib.name}');
+  // };
+
+  var injectableAnnotations = resolveInjectableAnnotations()
+
+  var rootLib = c.resolve(entryPoint);
+  var constructors = [];
+
+  for (var lib in walkLibraries(rootLib)) {
+    findLibraryConstructors(lib, constructors);
+  }
+
+  print(constructors);
 }
+
+List resolveInjectableAnnotations(Library rootLib, List<String> names) {
+  var pairs = names.map((n) {
+    var lastDot = n.lastIndexOf('.');
+    return [n.substring(0, lastDot), n.substring(lastDot)]
+  });
+
+  for (var lib in walkLibraries(rootLib)) {
+    for (var pair in pairs)
+  }
+}
+
+void findLibraryConstructors(LibraryElement lib, List<ConstructorElement> constructors) {
+
+  var injectableLib = lib.importedLibraries.where((l) => l.name == 'di.annotations');
+  if (!injectableLib.isEmpty) {
+    var injectableConstructor = injectableLib.first.getType('Injectables').unnamedConstructor;
+
+    findLibraryAnnotationConstructors(lib, injectableConstructor, constructors);
+    findAnnotatedClasses(lib, constructors);
+  }
+}
+
+void findLibraryAnnotationConstructors(LibraryElement lib,
+    ConstructorElement injectableConstructor,
+    List<ConstructorElement> constructors) {
+  var annotationIdx = 0;
+  for (var annotation in lib.metadata) {
+    if (annotation.element == injectableConstructor) {
+      var libDirective = lib.definingCompilationUnit.node.directives
+          .where((d) => d is LibraryDirective).single;
+
+      var annotationDirective = libDirective.metadata[annotationIdx];
+      var listLiteral = annotationDirective.arguments.arguments.first;
+
+      for (Expression expr in listLiteral.elements) {
+        var element = (expr as SimpleIdentifier).bestElement;
+        if (element == null || element is! ClassElement) {
+          print('Unable to resolve type $expr from @Injectables in ${library.source}');
+          continue;
+        }
+        if (validateInjectableClass(element)) {
+          constructors.add(element.unnamedConstructor);
+        }
+        if (validateConstructor(element.unnamedConstructor)) {
+
+        }
+        constructors.add(element.unnamedConstructor);
+      }
+    }
+    ++annotationIdx;
+  }
+}
+
+void findAnnotatedClasses(LibraryElement lib, List<ConstructorElement> constructors) {
+  for (var unit in lib.units) {
+    for (var type in unit.types) {
+      if (hasInjectAnnotation(type) && validateInjectableClass(type)) {
+        constructors.add(type.unnamedConstructor);
+      }
+
+      for (var ctor in type.constructors) {
+        if (hasInjectAnnotation(ctor)) {
+
+        }
+      }
+    }
+  }
+}
+
+bool hasInjectAnnotation(ClassElement cls) {
+  return true;
+}
+
+bool validateInjectableClass(ClassElement cls) {
+  if (cls.unnamedConstructor == null) {
+    print('WARNING: no default constructor');
+    return false;
+  }
+  var constructor = cls.unnamedConstructor;
+  return validateConstructor(constructor);
+}
+
+bool validateConstructor(ConstructorElement constructor) {
+  var cls = constructor.enclosingElement;
+  if (cls.isAbstract && !constructor.isFactory) {
+    print('WARNING: default constructor is not a factory constructor');
+    return false;
+  }
+  return true;
+}
+
+Iterable<LibraryElement> walkLibraries(LibraryElement entryPoint) =>
+    new _LibraryElementIterable(entryPoint);
+
+class _LibraryElementIterable extends IterableBase<LibraryElement> {
+  final LibraryElement _entryPoint;
+  _LibraryElementIterable(this._entryPoint);
+
+  Iterator<LibraryElement> get iterator => new _LibraryElementIterator(_entryPoint);
+}
+
+class _LibraryElementIterator implements Iterator<LibraryElement> {
+  Set<LibraryElement> _visited = new Set<LibraryElement>();
+  List<LibraryElement> _toVisit = <LibraryElement>[];
+  LibraryElement _current;
+
+  _LibraryElementIterator(LibraryElement entryPoint) {
+    _toVisit.add(entryPoint);
+  }
+
+  CompilationUnitElement get current => _current;
+
+  bool moveNext() {
+    if (_toVisit.isEmpty) {
+      _current = null;
+      return false;
+    }
+    _current = _toVisit.removeAt(0);
+    _visited.add(_current);
+
+    for (var imported in _current.importedLibraries) {
+      if (!_visited.contains(imported) && !_toVisit.contains(imported)) {
+        _toVisit.add(imported);
+      }
+    }
+
+    for (var exported in _current.exportedLibraries) {
+      if (!_visited.contains(exported) && !_toVisit.contains(exported)) {
+        _toVisit.add(exported);
+      }
+    }
+    return true;
+  }
+}
+/*
+
+Iterable<CompilationUnitElement> walkCompilationUnits(CompilationUnitElement entryPoint) =>
+    new _CompilationUnitIterable(entryPoint);
+
+class _CompilationUnitIterable extends IterableBase<CompilationUnitElement> {
+  final CompilationUnitElement _entryPoint;
+  _CompilationUnitIterable(this._entryPoint);
+
+  Iterator<CompilationUnitElement> get iterator => new _CompilationUnitIterator(_entryPoint);
+}
+
+class _CompilationUnitIterator implements Iterator<CompilationUnitElement> {
+  List<String> _visited = <String>[];
+  Map<String, CompilationUnitElement> _toVisit = <String, CompilationUnitElement>{};
+  CompilationUnitElement _current;
+
+  _CompilationUnitIterator(CompilationUnitElement entryPoint) {
+    _toVisit[entryPoint.uri] = entryPoint;
+  }
+
+  CompilationUnitElement get current => _current;
+
+  bool moveNext() {
+    if (_toVisit.isEmpty) {
+      _current = null;
+      return false;
+    }
+    var next = _toVisit.keys.first;
+    _current = _toVisit.remove(next);
+    _visited.add(next);
+    var lib = _current.enclosingElement;
+
+    for (var imported in lib.importedLibraries) {
+      var uri = imported.definingCompilationUnit.source.fullName;
+      var du = imported.definingCompilationUnit;
+      print('imported $uri, ${imported.name}, ${du.source.fullName}');
+      if (_toVisit.containsKey(uri)) {
+        print('haz? ${_toVisit[uri].enclosingElement == imported}');
+      }
+      if (!_visited.contains(uri) && !_toVisit.containsKey(uri)) {
+        _toVisit[uri] = imported.definingCompilationUnit;
+      }
+    }
+
+    for (var exported in lib.exportedLibraries) {
+      var uri = exported.definingCompilationUnit.uri;
+      print('exported $uri');
+      if (!_visited.contains(uri) && !_toVisit.containsKey(uri)) {
+        _toVisit[uri] = exported.definingCompilationUnit;
+      }
+    }
+    return true;
+  }
+}*/
 
 String printLibraryCode(Map<String, String> typeToImport, List<String> imports,
                       List<ClassElement> typeFactoryTypes) {
@@ -207,6 +416,50 @@ class SourceCrawler {
   AnalysisContext context = AnalysisEngine.instance.createAnalysisContext();
 
   SourceCrawler(this.sdkPath, this.packageRoots);
+
+  LibraryElement resolve(String entryPoint) {
+    JavaSystemIO.setProperty("com.google.dart.sdk", sdkPath);
+    DartSdk sdk = DirectoryBasedDartSdk.defaultSdk;
+
+    AnalysisOptionsImpl contextOptions = new AnalysisOptionsImpl();
+    contextOptions.cacheSize = 256;
+    contextOptions.preserveComments = false;
+    contextOptions.analyzeFunctionBodies = false;
+    context.analysisOptions = contextOptions;
+    sdk.context.analysisOptions = contextOptions;
+
+    var packageUriResolver =
+        new PackageUriResolver(packageRoots.map(
+            (pr) => new JavaFile.fromUri(new Uri.file(pr))).toList());
+    context.sourceFactory = new SourceFactory.con2([
+      new DartUriResolver(sdk),
+      new FileUriResolver(),
+      packageUriResolver
+    ]);
+
+    var entryPointFile;
+    var entryPointImport;
+    if (entryPoint.startsWith(PACKAGE_PREFIX)) {
+      entryPointFile = new JavaFile(packageUriResolver
+          .resolveAbsolute(context.sourceFactory.contentCache,
+              Uri.parse(entryPoint)).toString());
+      entryPointImport = entryPoint;
+    } else {
+      entryPointFile = new JavaFile(entryPoint);
+      entryPointImport = entryPointFile.getAbsolutePath();
+    }
+
+    Source source = new FileBasedSource.con1(
+        context.sourceFactory.contentCache, entryPointFile);
+    ChangeSet changeSet = new ChangeSet();
+    changeSet.added(source);
+    context.applyChanges(changeSet);
+    LibraryElement rootLib = context.computeLibraryElement(source);
+    CompilationUnit resolvedUnit =
+        context.resolveCompilationUnit(source, rootLib);
+
+    return rootLib;
+  }
 
   void crawl(String entryPoint, CompilationUnitCrawler _visitor) {
     JavaSystemIO.setProperty("com.google.dart.sdk", sdkPath);
